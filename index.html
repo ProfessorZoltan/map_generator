@@ -83,9 +83,14 @@
         <p class="text-gray-600 mb-6">Generate a map with a custom number of irregular, naturally connected regions, fitted for letter paper.</p>
 
         <div class="flex flex-col sm:flex-row items-center justify-center gap-4 mb-6">
-            <label for="numRegionsInput" class="text-lg font-medium text-gray-700">Number of Regions:</label>
+            <label for="numRegionsInput" class="text-lg font-medium text-gray-700">Regions:</label>
             <input type="number" id="numRegionsInput" value="7" min="2" max="50"
-                   class="w-24 p-2 border border-gray-300 rounded-md shadow-sm text-center text-gray-800 text-lg focus:ring-blue-500 focus:border-blue-500">
+                   class="w-20 p-2 border border-gray-300 rounded-md shadow-sm text-center text-gray-800 text-lg focus:ring-blue-500 focus:border-blue-500">
+            
+            <label for="squigglyAmountInput" class="text-lg font-medium text-gray-700">Squiggle:</label>
+            <input type="number" id="squigglyAmountInput" value="5" min="0" max="30" step="1"
+                   class="w-20 p-2 border border-gray-300 rounded-md shadow-sm text-center text-gray-800 text-lg focus:ring-blue-500 focus:border-blue-500">
+
             <button id="generateMapBtn" class="bg-blue-600 hover:bg-blue-700 text-white font-bold py-2 px-6 rounded-md shadow-lg transition duration-300 ease-in-out">Generate Map</button>
             <button id="downloadSvgBtn" class="bg-green-600 hover:bg-green-700 text-white font-bold py-2 px-6 rounded-md shadow-lg transition duration-300 ease-in-out hidden">Download SVG</button>
         </div>
@@ -95,12 +100,22 @@
     </div>
 
     <div id="mapSvgContainer">
-        <svg id="mapSvg"></svg>
+        <svg id="mapSvg">
+            <defs>
+                <filter id="squiggly-border">
+                    <!-- baseFrequency controls the "detail" of the squiggle, numOctaves controls roughness -->
+                    <feTurbulence type="fractalNoise" baseFrequency="0.05" numOctaves="3" seed="0" result="noise" />
+                    <!-- scale controls the "amount" of displacement. This is what the user will customize. -->
+                    <feDisplacementMap in="SourceGraphic" in2="noise" scale="5" xChannelSelector="R" yChannelSelector="G" />
+                </filter>
+            </defs>
+        </svg>
     </div>
 
     <script>
         document.addEventListener('DOMContentLoaded', () => {
             const numRegionsInput = document.getElementById('numRegionsInput');
+            const squigglyAmountInput = document.getElementById('squigglyAmountInput'); // New input
             const generateMapBtn = document.getElementById('generateMapBtn');
             const downloadSvgBtn = document.getElementById('downloadSvgBtn');
             const loadingIndicator = document.getElementById('loadingIndicator');
@@ -108,21 +123,11 @@
             const mapSvgContainer = document.getElementById('mapSvgContainer');
             const mapSvg = document.getElementById('mapSvg');
 
-            // Define the target aspect ratio for letter paper (landscape 11x8.5 inches)
-            const aspectRatio = 11 / 8.5;
-
-            // Calculate and set SVG dimensions once based on the container, maintaining aspect ratio
-            // These variables will hold the actual dimensions used for Voronoi generation.
-            const actualSvgWidth = mapSvgContainer.clientWidth;
-            const actualSvgHeight = actualSvgWidth / aspectRatio;
-            mapSvg.setAttribute('width', actualSvgWidth);
-            mapSvg.setAttribute('height', actualSvgHeight);
-
-            // Function to generate random seed points
+            const aspectRatio = 11 / 8.5; 
+            
             function generateRandomPoints(count, width, height) {
                 const points = [];
-                // Ensure padding so points are not too close to the edges, creating tiny, distorted cells
-                const padding = 20;
+                const padding = 20; 
                 for (let i = 0; i < count; i++) {
                     points.push([
                         Math.random() * (width - 2 * padding) + padding,
@@ -132,9 +137,9 @@
                 return points;
             }
 
-            // Function to draw the Voronoi diagram
-            function drawVoronoiMap() {
+            function drawVoronoiMap(svgWidth, svgHeight) { 
                 const numRegions = parseInt(numRegionsInput.value);
+                const squiggleScale = parseFloat(squigglyAmountInput.value); // Get squiggle amount
 
                 if (isNaN(numRegions) || numRegions < 2 || numRegions > 50) {
                     statusMessage.textContent = 'Please enter a number of regions between 2 and 50.';
@@ -142,56 +147,89 @@
                     downloadSvgBtn.classList.add('hidden');
                     return;
                 }
+                if (isNaN(squiggleScale) || squiggleScale < 0 || squiggleScale > 30) {
+                    statusMessage.textContent = 'Please enter a squiggle amount between 0 and 30.';
+                    loadingIndicator.style.display = 'none';
+                    downloadSvgBtn.classList.add('hidden');
+                    return;
+                }
 
-                statusMessage.textContent = `Generating map with ${numRegions} regions...`;
+                statusMessage.textContent = `Generating map with ${numRegions} regions and squiggle scale ${squiggleScale}...`;
                 loadingIndicator.style.display = 'block';
                 downloadSvgBtn.classList.add('hidden');
-                mapSvg.innerHTML = ''; // Clear previous SVG content
+                
+                d3.select("#mapSvg").selectAll("path").remove(); 
 
-                // Use the already calculated actualSvgWidth and actualSvgHeight
-                const points = generateRandomPoints(numRegions, actualSvgWidth, actualSvgHeight);
+                // Update the scale of feDisplacementMap based on user input
+                d3.select("#squiggly-border feDisplacementMap")
+                  .attr("scale", squiggleScale);
+                // Update the seed for feTurbulence to get a new squiggle pattern each time
+                d3.select("#squiggly-border feTurbulence")
+                  .attr("seed", Math.random() * 1000);
 
-                // Create a Delaunay triangulation from the points
+                const points = generateRandomPoints(numRegions, svgWidth, svgHeight);
+                
                 const delaunay = d3.Delaunay.from(points);
-                // Then create a Voronoi diagram from the Delaunay triangulation, using the SVG's bounds
-                const voronoi = delaunay.voronoi([0, 0, actualSvgWidth, actualSvgHeight]);
+                const voronoi = delaunay.voronoi([0, 0, svgWidth, svgHeight]);
 
-                // Select the SVG element using D3
                 const svg = d3.select("#mapSvg");
 
-                // Draw each Voronoi cell (region)
                 svg.selectAll("path")
                     .data(points)
                     .enter().append("path")
-                    .attr("d", (d, i) => voronoi.renderCell(i)) // Render the cell path for each point
-                    .attr("fill", "white") // White fill for regions
-                    .attr("stroke", "black") // Black border for regions
-                    .attr("stroke-width", 1);
+                    .attr("d", (d, i) => voronoi.renderCell(i)) 
+                    .attr("fill", "white")
+                    .attr("stroke", "black")
+                    .attr("stroke-width", 1)
+                    .attr("filter", "url(#squiggly-border)"); // Re-enabled the squiggly filter
 
                 loadingIndicator.style.display = 'none';
                 statusMessage.textContent = `Map generated successfully with ${numRegions} regions!`;
                 downloadSvgBtn.classList.remove('hidden');
             }
 
-            // Event listener for Generate Map button
-            generateMapBtn.addEventListener('click', drawVoronoiMap);
+            generateMapBtn.addEventListener('click', () => {
+                const currentSvgWidth = mapSvg.clientWidth;
+                const currentSvgHeight = mapSvg.clientHeight;
+                drawVoronoiMap(currentSvgWidth, currentSvgHeight);
+            });
 
-            // Event listener for Download SVG button
+            // Fix for blank downloaded SVG: ensure filter definitions are fully inlined
             downloadSvgBtn.addEventListener('click', () => {
-                const svgData = new XMLSerializer().serializeToString(mapSvg);
+                // Clone the SVG to manipulate for download without affecting display
+                const clonedSvg = mapSvg.cloneNode(true);
+
+                // Inline the filter definition if it's not already self-contained
+                // In D3, filters are usually in <defs> which is cloned, but for robustness:
+                let defs = clonedSvg.querySelector('defs');
+                if (!defs) {
+                    defs = document.createElementNS('http://www.w3.org/2000/svg', 'defs');
+                    clonedSvg.prepend(defs);
+                }
+                if (!defs.querySelector('#squiggly-border')) {
+                    const filter = document.getElementById('squiggly-border').cloneNode(true);
+                    defs.appendChild(filter);
+                }
+
+                const svgData = new XMLSerializer().serializeToString(clonedSvg);
                 const svgBlob = new Blob([svgData], { type: 'image/svg+xml;charset=utf-8' });
                 const svgUrl = URL.createObjectURL(svgBlob);
                 const downloadLink = document.createElement('a');
                 downloadLink.href = svgUrl;
-                downloadLink.download = `voronoi_map_${numRegionsInput.value}_regions.svg`;
+                downloadLink.download = `voronoi_map_${numRegionsInput.value}_regions_squiggle${squigglyAmountInput.value}.svg`;
                 document.body.appendChild(downloadLink);
                 downloadLink.click();
                 document.body.removeChild(downloadLink);
-                URL.revokeObjectURL(svgUrl); // Clean up
+                URL.revokeObjectURL(svgUrl);
             });
 
-            // Initial map generation on load
-            drawVoronoiMap();
+            setTimeout(() => {
+                const initialSvgWidth = mapSvgContainer.clientWidth;
+                const initialSvgHeight = initialSvgWidth / aspectRatio;
+                mapSvg.setAttribute('width', initialSvgWidth);
+                mapSvg.setAttribute('height', initialSvgHeight);
+                drawVoronoiMap(initialSvgWidth, initialSvgHeight);
+            }, 0); 
         });
     </script>
 </body>
