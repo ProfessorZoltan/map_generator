@@ -1,0 +1,198 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Customizable Voronoi Map Generator</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- D3.js for Voronoi and SVG manipulation -->
+    <script src="https://d3js.org/d3.v7.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/d3-delaunay@6"></script>
+    <style>
+        body {
+            font-family: 'Inter', sans-serif;
+            background-color: #f0f2f5;
+            display: flex;
+            flex-direction: column; /* Allow vertical stacking of container and SVG */
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh;
+            margin: 0;
+            padding: 20px;
+            box-sizing: border-box;
+        }
+        .container {
+            background-color: #ffffff;
+            padding: 30px;
+            border-radius: 12px;
+            box-shadow: 0 10px 25px rgba(0, 0, 0, 0.1);
+            text-align: center;
+            max-width: 600px;
+            width: 100%;
+            margin-bottom: 20px; /* Space between controls and map */
+        }
+        #mapSvgContainer {
+            background-color: white;
+            border: 1px solid #e0e0e0;
+            border-radius: 8px;
+            box-shadow: 0 5px 15px rgba(0, 0, 0, 0.08);
+            max-width: 100%;
+            /* Maintain 11:8.5 aspect ratio (landscape letter) */
+            width: 600px; /* Example fixed width for display */
+            height: calc(600px * 8.5 / 11); /* Calculate height based on aspect ratio */
+            display: flex; /* For centering SVG inside container */
+            justify-content: center;
+            align-items: center;
+            overflow: hidden; /* Hide overflow if SVG is slightly larger than container */
+        }
+        #mapSvg {
+            width: 100%;
+            height: 100%;
+            display: block; /* Remove extra space below SVG */
+        }
+        .loading-spinner {
+            border: 4px solid #f3f3f3;
+            border-top: 4px solid #3b82f6;
+            border-radius: 50%;
+            width: 40px;
+            height: 40px;
+            animation: spin 1s linear infinite;
+            margin: 20px auto;
+        }
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+        .message {
+            margin-top: 20px;
+            color: #4a5568;
+        }
+        input[type="number"] {
+            -moz-appearance: textfield; /* Firefox */
+        }
+        input[type="number"]::-webkit-outer-spin-button,
+        input[type="number"]::-webkit-inner-spin-button {
+            -webkit-appearance: none; /* Chrome, Safari, Edge */
+            margin: 0;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1 class="text-3xl font-bold text-blue-700 mb-4">Customizable Voronoi Map Generator</h1>
+        <p class="text-gray-600 mb-6">Generate a map with a custom number of irregular, naturally connected regions, fitted for letter paper.</p>
+
+        <div class="flex flex-col sm:flex-row items-center justify-center gap-4 mb-6">
+            <label for="numRegionsInput" class="text-lg font-medium text-gray-700">Number of Regions:</label>
+            <input type="number" id="numRegionsInput" value="7" min="2" max="50"
+                   class="w-24 p-2 border border-gray-300 rounded-md shadow-sm text-center text-gray-800 text-lg focus:ring-blue-500 focus:border-blue-500">
+            <button id="generateMapBtn" class="bg-blue-600 hover:bg-blue-700 text-white font-bold py-2 px-6 rounded-md shadow-lg transition duration-300 ease-in-out">Generate Map</button>
+            <button id="downloadSvgBtn" class="bg-green-600 hover:bg-green-700 text-white font-bold py-2 px-6 rounded-md shadow-lg transition duration-300 ease-in-out hidden">Download SVG</button>
+        </div>
+
+        <div id="loadingIndicator" class="loading-spinner hidden"></div>
+        <div id="statusMessage" class="message">Click "Generate Map" to create your custom map!</div>
+    </div>
+
+    <div id="mapSvgContainer">
+        <svg id="mapSvg"></svg>
+    </div>
+
+    <script>
+        document.addEventListener('DOMContentLoaded', () => {
+            const numRegionsInput = document.getElementById('numRegionsInput');
+            const generateMapBtn = document.getElementById('generateMapBtn');
+            const downloadSvgBtn = document.getElementById('downloadSvgBtn');
+            const loadingIndicator = document.getElementById('loadingIndicator');
+            const statusMessage = document.getElementById('statusMessage');
+            const mapSvgContainer = document.getElementById('mapSvgContainer');
+            const mapSvg = document.getElementById('mapSvg');
+
+            // Define the target aspect ratio for letter paper (landscape 11x8.5 inches)
+            const aspectRatio = 11 / 8.5;
+
+            // Calculate and set SVG dimensions once based on the container, maintaining aspect ratio
+            // These variables will hold the actual dimensions used for Voronoi generation.
+            const actualSvgWidth = mapSvgContainer.clientWidth;
+            const actualSvgHeight = actualSvgWidth / aspectRatio;
+            mapSvg.setAttribute('width', actualSvgWidth);
+            mapSvg.setAttribute('height', actualSvgHeight);
+
+            // Function to generate random seed points
+            function generateRandomPoints(count, width, height) {
+                const points = [];
+                // Ensure padding so points are not too close to the edges, creating tiny, distorted cells
+                const padding = 20;
+                for (let i = 0; i < count; i++) {
+                    points.push([
+                        Math.random() * (width - 2 * padding) + padding,
+                        Math.random() * (height - 2 * padding) + padding
+                    ]);
+                }
+                return points;
+            }
+
+            // Function to draw the Voronoi diagram
+            function drawVoronoiMap() {
+                const numRegions = parseInt(numRegionsInput.value);
+
+                if (isNaN(numRegions) || numRegions < 2 || numRegions > 50) {
+                    statusMessage.textContent = 'Please enter a number of regions between 2 and 50.';
+                    loadingIndicator.style.display = 'none';
+                    downloadSvgBtn.classList.add('hidden');
+                    return;
+                }
+
+                statusMessage.textContent = `Generating map with ${numRegions} regions...`;
+                loadingIndicator.style.display = 'block';
+                downloadSvgBtn.classList.add('hidden');
+                mapSvg.innerHTML = ''; // Clear previous SVG content
+
+                // Use the already calculated actualSvgWidth and actualSvgHeight
+                const points = generateRandomPoints(numRegions, actualSvgWidth, actualSvgHeight);
+
+                // Create a Delaunay triangulation from the points
+                const delaunay = d3.Delaunay.from(points);
+                // Then create a Voronoi diagram from the Delaunay triangulation, using the SVG's bounds
+                const voronoi = delaunay.voronoi([0, 0, actualSvgWidth, actualSvgHeight]);
+
+                // Select the SVG element using D3
+                const svg = d3.select("#mapSvg");
+
+                // Draw each Voronoi cell (region)
+                svg.selectAll("path")
+                    .data(points)
+                    .enter().append("path")
+                    .attr("d", (d, i) => voronoi.renderCell(i)) // Render the cell path for each point
+                    .attr("fill", "white") // White fill for regions
+                    .attr("stroke", "black") // Black border for regions
+                    .attr("stroke-width", 1);
+
+                loadingIndicator.style.display = 'none';
+                statusMessage.textContent = `Map generated successfully with ${numRegions} regions!`;
+                downloadSvgBtn.classList.remove('hidden');
+            }
+
+            // Event listener for Generate Map button
+            generateMapBtn.addEventListener('click', drawVoronoiMap);
+
+            // Event listener for Download SVG button
+            downloadSvgBtn.addEventListener('click', () => {
+                const svgData = new XMLSerializer().serializeToString(mapSvg);
+                const svgBlob = new Blob([svgData], { type: 'image/svg+xml;charset=utf-8' });
+                const svgUrl = URL.createObjectURL(svgBlob);
+                const downloadLink = document.createElement('a');
+                downloadLink.href = svgUrl;
+                downloadLink.download = `voronoi_map_${numRegionsInput.value}_regions.svg`;
+                document.body.appendChild(downloadLink);
+                downloadLink.click();
+                document.body.removeChild(downloadLink);
+                URL.revokeObjectURL(svgUrl); // Clean up
+            });
+
+            // Initial map generation on load
+            drawVoronoiMap();
+        });
+    </script>
+</body>
+</html>
